@@ -1,8 +1,18 @@
 import { flyChips } from "./anim.js";
 
+/**
+ * Booth Blackjack game engine (client-side).
+ * - Modified deck: ranks 0..7 (0 is "ace" valued 8, can drop by 8 if busting)
+ * - Bust: > 15
+ * - Dealer hits while < 12
+ * - Practice: bet=0, money hidden by app (app.js)
+ * - Play: betting via buttons, DEAL starts round
+ * - Supports SPLIT (same rank) and DOUBLE (exactly 2 cards)
+ */
 export function createGame({ sfx, getRunId, getMode, onRoundOver, onMoneyChange } = {}) {
   const INITIAL_MONEY = 10000;
-  // ---------- 덱(원본 동일) ----------
+
+  // ---------- Deck ----------
   let deck = [];
   function createDeck() {
     deck = [];
@@ -17,6 +27,7 @@ export function createGame({ sfx, getRunId, getMode, onRoundOver, onMoneyChange 
       7, 7, 7, 7, 7, 7, 7, 7,
       7, 7, 7, 7, 7, 7, 7, 7
     ];
+    // 4 decks (kept as-is from your earlier ratio)
     for (let k = 0; k < 4; k++) {
       for (const r of ranks) deck.push({ rank: r });
     }
@@ -32,18 +43,17 @@ export function createGame({ sfx, getRunId, getMode, onRoundOver, onMoneyChange 
     if (deck.length === 0) createDeck();
     return deck.pop();
   }
-  
-  // ---------- 점수(원본 동일) ----------
-  function cardValue(c) {
-    return (c.rank === 0) ? 8 : c.rank;
-  }
+
+  // ---------- Scoring ----------
+  function cardValue(c) { return (c.rank === 0) ? 8 : c.rank; }
   function handValue(hand) {
     let value = 0;
-    let aces = 0; // rank=0 개수
+    let aces = 0; // rank=0 count
     for (const c of hand) {
       value += cardValue(c);
       if (c.rank === 0) aces++;
     }
+    // "soft" adjustment: each ace can drop by 8 (8 -> 0)
     while (value > 15 && aces) {
       value -= 8;
       aces--;
@@ -51,59 +61,65 @@ export function createGame({ sfx, getRunId, getMode, onRoundOver, onMoneyChange 
     return value;
   }
   function isBlackjack15_2cards(hand) {
-    return (hand.length === 2 && handValue(hand) === 15);
+    return hand.length === 2 && handValue(hand) === 15;
   }
-  
-  // ---------- UI 참조 ----------
+
+  // ---------- DOM refs ----------
   const table = document.getElementById("table");
-  
   const dealerHandEl = document.getElementById("dealerHand");
   const dealerSumEl = document.getElementById("dealerSum");
-  
   const deckStackEl = document.getElementById("deckStack");
   const deckCountEl = document.getElementById("deckCount");
-  
   const playerBlocksEl = document.getElementById("playerBlocks");
   const moneyEl = document.getElementById("money");
   const betEl = document.getElementById("bet");
-  
   const betButtons = Array.from(document.querySelectorAll(".betBtn"));
   const btnDeal = document.getElementById("btnDeal");
-  
-  // ---------- 게임 상태 ----------
+
+  if (!table || !dealerHandEl || !dealerSumEl || !deckStackEl || !playerBlocksEl || !moneyEl || !betEl || !btnDeal) {
+    console.error("Missing required DOM elements for game.js");
+  }
+
+  // ---------- Game state ----------
   let money = INITIAL_MONEY;
-  let pendingBet = 0;     // ✅ 베팅은 0부터 시작(버튼으로만 증가)
-  let baseBet = 0;        // 현재 라운드의 1핸드 베팅(스플릿 시 손패별로 동일)
-  let phase = "betting";  // betting | resolvingSplit | playing | dealer | roundOver
-  
+
+  let pendingBet = 0;    // shown while phase===betting
+  let baseBet = 0;       // bet for the first hand (and default for others)
+
   let dealerHand = [];
   let dealerHidden = true;
   let dealerBlackjack = false;
-  
-  let playerHands = [[]]; // 스플릿 시 [hand1, hand2]
-  let playerBets = [];    // 각 핸드별 베팅
-  let results = [];       // 'done' | 'stand'
-  let outcomes = [];      // 'blackjack' | 'bust' | null (표시/정산 보조)
+
+  let playerHands = [[]];   // array of hands
+  let playerBets = [];      // per-hand bet (aligned with playerHands)
+  let results = [];         // per-hand result tags
+  let outcomes = [];        // optional output text
+
   let activeHandIdx = 0;
-  
-  // 핸드 DOM 참조 캐시(라운드 중 불필요한 재렌더 방지)
-  let handEls = [];       // [#playerHand0, #playerHand1...]
-  let actionEls = [];     // [#actions0, #actions1...]
-  let sumEls = [];        // [#playerSum0, #playerSum1...]
-  
-  // ---------- 인디케이터 ----------
+
+  // betting | resolvingSplit | playing | dealer | roundOver
+  let phase = "betting";
+
+  // UI caches
+  let handEls = [];
+  let actionEls = [];
+  let sumEls = [];
+
+  function currentRunId() { return (getRunId ? getRunId() : 0); }
+
+  // ---------- Indicators ----------
   function updateIndicators() {
-    moneyEl.textContent = money.toLocaleString();
-  
-    // ✅ 베팅 표시: betting 단계에서는 pendingBet, 그 외엔 playerBets 합
+    if (moneyEl) moneyEl.textContent = money.toLocaleString();
+
     const shownBet = (phase === "betting" || phase === "roundOver")
       ? pendingBet
-      : (playerBets.reduce((a, b) => a + b, 0));
-  
-    betEl.textContent = shownBet.toLocaleString();
+      : playerBets.reduce((a, b) => a + b, 0);
+
+    if (betEl) betEl.textContent = shownBet.toLocaleString();
     if (deckCountEl) deckCountEl.textContent = `DECK ${deck.length}`;
   }
   function setDealerSum() {
+    if (!dealerSumEl) return;
     dealerSumEl.textContent = dealerHidden ? "?" : String(handValue(dealerHand));
   }
   function setPlayerSums() {
@@ -111,206 +127,202 @@ export function createGame({ sfx, getRunId, getMode, onRoundOver, onMoneyChange 
       if (sumEls[i]) sumEls[i].textContent = String(handValue(playerHands[i]));
     }
   }
-  
-  // ---------- 카드 DOM (img + flip) ----------
+
+  // ---------- Card DOM (flip) ----------
   function makeCardElement({ faceRank = null, faceUp = false }) {
     const card = document.createElement("div");
     card.className = "card";
-  
+
     const inner = document.createElement("div");
     inner.className = "card-inner";
-  
+
     const back = document.createElement("div");
     back.className = "card-back";
     const backImg = document.createElement("img");
-    backImg.src = "cards/back.png"; // png로 바꾸면 back.png
+    backImg.src = "cards/back.png";
     back.appendChild(backImg);
-  
+
     const face = document.createElement("div");
     face.className = "card-face";
     const faceImg = document.createElement("img");
-    if (faceRank !== null) faceImg.src = `cards/${faceRank}.png`; // png면 .png
+    if (faceRank !== null) faceImg.src = `cards/${faceRank}.png`;
     face.appendChild(faceImg);
-  
+
     inner.appendChild(back);
     inner.appendChild(face);
     card.appendChild(inner);
-  
+
     if (faceUp) card.classList.add("is-face");
     return card;
   }
-  
+
   function flipCard(cardEl, rank) {
+    if (!cardEl) return;
     const faceImg = cardEl.querySelector(".card-face img");
-    if (rank !== undefined && rank !== null) {
-      faceImg.src = `cards/${rank}.png`; // png면 .png
+    if (faceImg && rank !== undefined && rank !== null) {
+      faceImg.src = `cards/${rank}.png`;
     }
     sfx?.play?.("flip");
     cardEl.classList.add("is-face");
-    // sfx.flip?.play(); // 추후
   }
-  
-  // ---------- 좌표 유틸 ----------
+
+  // ---------- Geometry helpers ----------
   function viewportToTablePoint(pt) {
-    const tr = table.getBoundingClientRect();
-    return { x: pt.x - tr.left, y: pt.y - tr.top };
+    const t = table.getBoundingClientRect();
+    return { x: pt.x - t.left, y: pt.y - t.top };
   }
-  
-  function getCenterViewport(el){
+  function elCenterInViewport(el) {
     const r = el.getBoundingClientRect();
-    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    return { x: r.left + r.width * 0.5, y: r.top + r.height * 0.5 };
   }
-  
-  function getHandCenterTable(handEl){
-    return viewportToTablePoint(getCenterViewport(handEl));
+  function getDeckCenterTable() {
+    return viewportToTablePoint(elCenterInViewport(deckStackEl));
   }
-  function getDeckCenterTable(){
-    return viewportToTablePoint(getCenterViewport(deckStackEl));
+  function getHandCenterTable(handEl) {
+    return viewportToTablePoint(elCenterInViewport(handEl));
   }
-  
+
+  // ---------- Deal animation ----------
   function dealCardTo(handEl, { rank, keepFaceDown = true }) {
-    const myRun = (getRunId ? getRunId() : 0);
+    const myRun = currentRunId();
     return new Promise((resolve) => {
-      if (getRunId && getRunId() !== myRun) return resolve(null);
-      // 카드 1장 분배 소리
+      if (currentRunId() !== myRun) return resolve(null);
+
       sfx?.play?.("throw");
+
       const flying = makeCardElement({
         faceRank: keepFaceDown ? null : rank,
         faceUp: !keepFaceDown
       });
-  
+
       flying.classList.add("flying");
       table.appendChild(flying);
-  
-      // 시작/도착 좌표: 반드시 "table 로컬 좌표"
+
       const start = getDeckCenterTable();
-      const end   = getHandCenterTable(handEl);
-  
-      // 요소 크기
-      const w = flying.offsetWidth;
-      const h = flying.offsetHeight;
-  
-      const startX = start.x - w / 2;
-      const startY = start.y - h / 2;
-      const endX   = end.x   - w / 2;
-      const endY   = end.y   - h / 2;
-  
-      // 시작 위치 세팅 (transition 없이)
-      flying.style.transition = "none";
-      flying.style.transform = `translate3d(${startX}px, ${startY}px, 0)`;
-  
-      // ✅ reflow 강제(이게 없으면 ‘안 움직임’이 재발할 수 있습니다)
-      flying.getBoundingClientRect();
-  
-      // 이동 시작 (transition 복원)
-      flying.style.transition = ""; // .flying CSS의 transition 사용
+      const end = getHandCenterTable(handEl);
+
+      // randomized landing inside hand
+      const jitterX = (Math.random() - 0.5) * 26;
+      const jitterY = (Math.random() - 0.5) * 14;
+
+      flying.style.left = `${start.x - 40}px`;
+      flying.style.top = `${start.y - 60}px`;
+      flying.style.transform = "translate3d(0,0,0) rotate(0deg)";
+      flying.style.opacity = "1";
+
+      // let layout happen then animate
       requestAnimationFrame(() => {
-        flying.style.transform = `translate3d(${endX}px, ${endY}px, 0)`;
+        if (currentRunId() !== myRun) {
+          flying.remove();
+          return resolve(null);
+        }
+        const dx = (end.x - 40 + jitterX) - (start.x - 40);
+        const dy = (end.y - 60 + jitterY) - (start.y - 60);
+        flying.style.transform = `translate3d(${dx}px, ${dy}px, 0) rotate(${(Math.random()-0.5)*14}deg)`;
       });
-  
-      flying.addEventListener("transitionend", (e) => {
-        if (e.propertyName !== "transform") return;
-        flying.classList.remove("flying");
-        flying.style.transform = "";
-        handEl.appendChild(flying);
-        if (getRunId && getRunId() !== myRun) { try { flying.remove(); } catch {} return resolve(null); }
-      resolve(flying);
-      }, { once: true });
-    });
-  }
-  
-  // ---------- 라운드 종료 페이드아웃 ----------
-  function fadeOutAndClear() {
-    const allCards = table.querySelectorAll(".card");
-    allCards.forEach(c => c.classList.add("fade-out"));
-    requestAnimationFrame(() => allCards.forEach(c => c.classList.add("go")));
-    return new Promise((resolve) => {
+
+      // after transition, move into hand
       setTimeout(() => {
-        dealerHandEl.innerHTML = "";
-        playerBlocksEl.innerHTML = "";
-        resolve();
-      }, 460);
+        if (currentRunId() !== myRun) {
+          flying.remove();
+          return resolve(null);
+        }
+        flying.classList.remove("flying");
+        flying.style.left = "";
+        flying.style.top = "";
+        flying.style.transform = "";
+        flying.style.opacity = "";
+
+        handEl.appendChild(flying);
+        resolve(flying);
+      }, 430);
     });
   }
-  
-  // ---------- 플레이어 블록 생성(스플릿 대응) ----------
+
+  async function fadeOutAndClear() {
+    const myRun = currentRunId();
+    const cards = table.querySelectorAll(".card");
+    cards.forEach(c => (c.style.opacity = "0"));
+    await new Promise(r => setTimeout(r, 260));
+    if (currentRunId() !== myRun) return;
+    cards.forEach(c => c.remove());
+  }
+
+  // ---------- Player blocks ----------
   function initPlayerBlocks(nHands) {
     playerBlocksEl.innerHTML = "";
     handEls = [];
     actionEls = [];
     sumEls = [];
-  
+
     for (let idx = 0; idx < nHands; idx++) {
       const block = document.createElement("div");
       block.className = "player-block";
-      if (idx === activeHandIdx && phase === "playing") block.classList.add("active");
-  
+      block.dataset.idx = String(idx);
+
       const head = document.createElement("div");
       head.className = "player-head";
-  
+
       const label = document.createElement("div");
       label.className = "label";
       label.textContent = (nHands === 1) ? "PLAYER 0" : `PLAYER ${idx}`;
-  
+
       const sum = document.createElement("div");
       sum.className = "sum";
       sum.id = `playerSum${idx}`;
       sum.textContent = "0";
-  
+
       head.appendChild(label);
       head.appendChild(sum);
-  
+
       const handEl = document.createElement("div");
       handEl.className = "hand";
       handEl.id = `playerHand${idx}`;
-  
+
       const actions = document.createElement("div");
       actions.className = "player-actions";
       actions.id = `actions${idx}`;
-  
+
       block.appendChild(head);
       block.appendChild(handEl);
       block.appendChild(actions);
+
       playerBlocksEl.appendChild(block);
-  
-      handEls[idx] = handEl;
-      actionEls[idx] = actions;
-      sumEls[idx] = sum;
+
+      handEls.push(handEl);
+      actionEls.push(actions);
+      sumEls.push(sum);
     }
   }
-  
+
   function markActiveBlock() {
-    const blocks = playerBlocksEl.querySelectorAll(".player-block");
-    blocks.forEach((b, idx) => {
-      b.classList.toggle("active", phase === "playing" && idx === activeHandIdx);
-    });
-  }
-  
-  // ---------- 버튼 세트 설정 ----------
-  function setBettingButtonsEnabled(enabled) {
-    // betting UI는 updateBettingButtonsValidity()에서 통합 제어
-    if (!enabled) {
-      betButtons.forEach(b => b.disabled = true);
-      btnDeal.disabled = true;
+    const blocks = Array.from(playerBlocksEl.querySelectorAll(".player-block"));
+    blocks.forEach(b => b.classList.remove("active"));
+    if (phase === "playing" || phase === "resolvingSplit") {
+      const b = blocks[activeHandIdx] || blocks[0];
+      b?.classList.add("active");
+    } else if (phase === "betting") {
+      blocks[0]?.classList.add("active");
     }
-  
-  function updateBettingButtonsValidity() {
+  }
+
+  // ---------- Betting buttons enable ----------
+  function setBettingButtonsEnabled(enable) {
     const m = getMode ? getMode() : "play";
     const inBetting = (phase === "betting");
-  
+
     if (m === "practice") {
-      // +/- 비활성, DEAL만 허용(베팅은 0)
       betButtons.forEach(b => (b.disabled = true));
       btnDeal.disabled = !inBetting;
       return;
     }
-  
-    if (m !== "play" || !inBetting) {
+
+    if (!enable || m !== "play" || !inBetting) {
       betButtons.forEach(b => (b.disabled = true));
       btnDeal.disabled = true;
       return;
     }
-  
+
     for (const b of betButtons) {
       const delta = Number(b.dataset.delta || "0");
       const next = pendingBet + delta;
@@ -318,69 +330,65 @@ export function createGame({ sfx, getRunId, getMode, onRoundOver, onMoneyChange 
     }
     btnDeal.disabled = !(pendingBet > 0 && pendingBet <= money);
   }
-  }
-  
+
   function clearAllPlayerActions() {
     for (const el of actionEls) el.innerHTML = "";
   }
-  
+
   function setSplitChoiceButtons() {
-    // ✅ 스플릿 가능 시: SPLIT / DO NOT (PLAYER 0에만 표시)
     clearAllPlayerActions();
     const el = actionEls[0];
     if (!el) return;
-  
+
     const b1 = document.createElement("button");
     b1.textContent = "SPLIT";
     b1.onclick = () => doSplit();
-  
+
     const b2 = document.createElement("button");
     b2.textContent = "DO NOT";
     b2.onclick = () => cancelSplit();
-  
+
     el.appendChild(b1);
     el.appendChild(b2);
   }
-  
+
   function setPlayButtons() {
-    // ✅ playing 시: 각 핸드에 HIT/STAND (+조건부 DOUBLE), 비활성은 disabled
     for (let i = 0; i < playerHands.length; i++) {
       const actionsEl = actionEls[i];
       if (!actionsEl) continue;
       actionsEl.innerHTML = "";
-  
+
       const isActive = (phase === "playing" && i === activeHandIdx);
-  
+
       const hit = document.createElement("button");
       hit.textContent = "HIT";
       hit.disabled = !isActive;
       hit.onclick = () => playerHit();
-  
+
       const stand = document.createElement("button");
       stand.textContent = "STAND";
       stand.disabled = !isActive;
       stand.onclick = () => playerStand();
-  
+
       actionsEl.appendChild(hit);
       actionsEl.appendChild(stand);
-  
-      // 더블: 원본처럼 “현재 핸드가 2장이고 money>=baseBet”일 때만 표시(또는 disabled)
+
+      // DOUBLE: only if active hand has 2 cards and enough money to match bet
       if (isActive && playerHands[i].length === 2) {
         const dbl = document.createElement("button");
         dbl.textContent = "DOUBLE";
-        dbl.disabled = (money < baseBet);
+        dbl.disabled = !(money >= (playerBets[i] || baseBet));
         dbl.onclick = () => playerDouble();
         actionsEl.appendChild(dbl);
       }
     }
   }
-  
+
   function showProceedButton() {
-    // ✅ PROCEED 단일 버튼(PLAYER 0 actions에만)
     clearAllPlayerActions();
     const el = document.getElementById("actions0");
     if (!el) return;
-  
+
     el.innerHTML = "";
     const btn = document.createElement("button");
     btn.textContent = "PROCEED";
@@ -390,147 +398,367 @@ export function createGame({ sfx, getRunId, getMode, onRoundOver, onMoneyChange 
     };
     el.appendChild(btn);
   }
-  
-  // ---------- 상태 초기화 ----------
+
+  // ---------- Reset ----------
   function resetToBetting() {
     phase = "betting";
     baseBet = 0;
-  
     dealerHand = [];
     dealerHidden = true;
     dealerBlackjack = false;
-  
+
     playerHands = [[]];
     playerBets = [];
     results = [];
     outcomes = [];
     activeHandIdx = 0;
-  
-    pendingBet = 0; // ✅ 라운드 끝나면 베팅 0으로 초기화
-  
-    initPlayerBlocks(1); // 화면상 PLAYER 0 블록은 항상 준비
+
+    pendingBet = 0;
+
+    initPlayerBlocks(1);
+    dealerHandEl.innerHTML = "";
     setDealerSum();
     updateIndicators();
     setBettingButtonsEnabled(true);
-  
-    // betting 단계에서는 액션 버튼 없음
     clearAllPlayerActions();
+    markActiveBlock();
   }
-  
-  // ---------- 베팅 버튼 ----------
-  
-  // (event listeners are attached in createGame)
-  
-  // ---------- 베팅 버튼 이벤트(부스 버전: 7개 버튼) ----------
+
+  // ---------- Split / Double helpers ----------
+  function canSplitNow() {
+    const m = getMode ? getMode() : "play";
+    if (m !== "play") return false;
+    if (playerHands.length !== 1) return false;
+    if (playerHands[0].length !== 2) return false;
+    const [a, b] = playerHands[0];
+    if (a.rank !== b.rank) return false;
+    // need to be able to place another baseBet
+    return money >= baseBet && baseBet > 0;
+  }
+
+  async function doSplit() {
+    if (phase !== "resolvingSplit") return;
+    const myRun = currentRunId();
+
+    // take second bet
+    money -= baseBet;
+    onMoneyChange?.(money);
+
+    // create 2 hands from the original 2 cards
+    const c1 = playerHands[0][0];
+    const c2 = playerHands[0][1];
+    playerHands = [[c1], [c2]];
+    playerBets = [baseBet, baseBet];
+    results = [];
+    outcomes = [];
+    activeHandIdx = 0;
+
+    // rebuild blocks UI to 2 hands and move existing 2 cards into them
+    initPlayerBlocks(2);
+    markActiveBlock();
+
+    // clear existing cards from dealer/player areas and re-deal visuals (simplest, consistent)
+    dealerHandEl.innerHTML = "";
+    // re-render dealer cards from state (2 cards already exist)
+    for (let i = 0; i < dealerHand.length; i++) {
+      const keepDown = (i === 1) && dealerHidden;
+      const cardEl = makeCardElement({ faceRank: keepDown ? null : dealerHand[i].rank, faceUp: !keepDown });
+      dealerHandEl.appendChild(cardEl);
+      if (!keepDown) cardEl.classList.add("is-face");
+    }
+
+    // render split player cards (face up)
+    for (let h = 0; h < 2; h++) {
+      const cardEl = makeCardElement({ faceRank: playerHands[h][0].rank, faceUp: true });
+      cardEl.classList.add("is-face");
+      handEls[h].appendChild(cardEl);
+    }
+
+    // each hand draws one extra card (face-down flight, then flip)
+    for (let h = 0; h < 2; h++) {
+      if (currentRunId() !== myRun) return;
+      const c = drawCard();
+      playerHands[h].push(c);
+      const el = await dealCardTo(handEls[h], { rank: c.rank, keepFaceDown: true });
+      if (currentRunId() !== myRun) return;
+      flipCard(el, c.rank);
+    }
+
+    setPlayerSums();
+    setDealerSum();
+
+    phase = "playing";
+    activeHandIdx = 0;
+    markActiveBlock();
+    setPlayButtons();
+    updateIndicators();
+  }
+
+  function cancelSplit() {
+    if (phase !== "resolvingSplit") return;
+    phase = "playing";
+    activeHandIdx = 0;
+    markActiveBlock();
+    setPlayButtons();
+    updateIndicators();
+  }
+
+  // ---------- Player actions ----------
+  async function playerHit() {
+    if (phase !== "playing") return;
+    const myRun = currentRunId();
+    const i = activeHandIdx;
+
+    const c = drawCard();
+    playerHands[i].push(c);
+
+    const el = await dealCardTo(handEls[i], { rank: c.rank, keepFaceDown: true });
+    if (currentRunId() !== myRun) return;
+
+    flipCard(el, c.rank);
+    setPlayerSums();
+
+    if (handValue(playerHands[i]) > 15) {
+      // bust this hand
+      results[i] = "bust";
+      if (sumEls[i]) sumEls[i].textContent = "BUST";
+      await advanceOrDealer();
+    } else {
+      setPlayButtons();
+      updateIndicators();
+    }
+  }
+
+  async function playerStand() {
+    if (phase !== "playing") return;
+    results[activeHandIdx] = "stand";
+    await advanceOrDealer();
+  }
+
+  async function playerDouble() {
+    if (phase !== "playing") return;
+    const i = activeHandIdx;
+
+    // only allow on 2 cards
+    if (playerHands[i].length !== 2) return;
+
+    const add = (playerBets[i] || baseBet);
+    if (money < add) return;
+
+    money -= add;
+    playerBets[i] = (playerBets[i] || baseBet) + add; // double
+    onMoneyChange?.(money);
+
+    // one hit then stand
+    await playerHit();
+    if (phase !== "playing") return;
+    results[i] = "stand";
+    await advanceOrDealer();
+  }
+
+  async function advanceOrDealer() {
+    // move to next unfinished hand, else dealer turn
+    for (let j = activeHandIdx + 1; j < playerHands.length; j++) {
+      if (!results[j]) {
+        activeHandIdx = j;
+        markActiveBlock();
+        setPlayButtons();
+        updateIndicators();
+        return;
+      }
+    }
+    // all hands done
+    phase = "dealer";
+    markActiveBlock();
+    clearAllPlayerActions();
+    await dealerTurnAndResolve();
+  }
+
+  // ---------- Dealer turn & resolve ----------
+  async function dealerTurnAndResolve() {
+    const myRun = currentRunId();
+
+    // reveal hidden card
+    dealerHidden = false;
+    setDealerSum();
+    const dCards = dealerHandEl.querySelectorAll(".card");
+    if (dCards[1]) flipCard(dCards[1], dealerHand[1]?.rank);
+
+    // dealer hits while < 12 (unless blackjack already)
+    if (!dealerBlackjack) {
+      while (handValue(dealerHand) < 12) {
+        if (currentRunId() !== myRun) return;
+        const c = drawCard();
+        dealerHand.push(c);
+
+        const el = await dealCardTo(dealerHandEl, { rank: c.rank, keepFaceDown: true });
+        if (currentRunId() !== myRun) return;
+
+        flipCard(el, c.rank);
+        setDealerSum();
+      }
+    }
+
+    // resolve
+    const m = getMode ? getMode() : "play";
+    const dealerScore = handValue(dealerHand);
+    const dealerBust = dealerScore > 15;
+
+    let anyWin = false;
+    let anyLose = false;
+
+    for (let i = 0; i < playerHands.length; i++) {
+      // if bust already
+      if (results[i] === "bust") {
+        if (sumEls[i]) sumEls[i].textContent = "LOSE";
+        anyLose = true;
+        continue;
+      }
+
+      const score = handValue(playerHands[i]);
+
+      let res = "PUSH";
+      if (dealerBust) res = "WIN";
+      else if (score > dealerScore) res = "WIN";
+      else if (score < dealerScore) res = "LOSE";
+      else res = "PUSH";
+
+      if (sumEls[i]) sumEls[i].textContent = res;
+
+      if (m === "play") {
+        const bet = playerBets[i] ?? baseBet;
+        if (res === "WIN") money += bet * 2;
+        else if (res === "PUSH") money += bet;
+        onMoneyChange?.(money);
+      }
+
+      if (res === "WIN") anyWin = true;
+      if (res === "LOSE") anyLose = true;
+    }
+
+    if (anyWin && !anyLose) sfx?.play?.("win");
+    else if (anyLose) sfx?.play?.("lose");
+
+    phase = "roundOver";
+    markActiveBlock();
+    showProceedButton();
+
+    onRoundOver?.({ money, phase, outcome: anyWin ? "WIN" : "LOSE", mode: m });
+    updateIndicators();
+  }
+
+  // ---------- Betting handlers ----------
   betButtons.forEach(btn => {
     btn.addEventListener("click", () => {
       if (phase !== "betting") return;
       const m = getMode ? getMode() : "play";
       if (m !== "play") return;
-  
+
       const delta = Number(btn.dataset.delta || "0");
       const next = pendingBet + delta;
       if (!(next >= 0 && next <= money)) return;
-  
-      // 베팅 버튼 소리
+
       sfx?.play?.("bet");
-  
       pendingBet = next;
       updateIndicators();
+      setBettingButtonsEnabled(true);
     });
   });
-  
-  // ---------- DEAL 버튼 ----------
+
   btnDeal.addEventListener("click", async () => {
     if (phase !== "betting") return;
-  
+
     const m = getMode ? getMode() : "play";
-    const myRun = (getRunId ? getRunId() : 0);
-  
+    const myRun = currentRunId();
+
     if (m === "play") {
       if (pendingBet <= 0) return;
       if (pendingBet > money) return;
     } else if (m === "practice") {
-      // 연습은 bet=0으로 허용
+      // allow bet=0
     } else {
       return;
     }
-  
-    // DEAL 효과음 = bet
+
+    // DEAL sound = bet
     sfx?.play?.("bet");
-  
-    // 라운드 시작
+
+    // round start shuffle
     if (deck.length === 0) createDeck();
-    shuffle(deck); // 원본: 라운드 시작 시 셔플
+    shuffle(deck);
     sfx?.play?.("shuffle");
-  
-    phase = "dealing";
+
+    phase = "dealer"; // temporarily block betting
     setBettingButtonsEnabled(false);
-  
+
     baseBet = (m === "practice") ? 0 : pendingBet;
-    pendingBet = 0;               // DEAL 누르면 입력 베팅은 0으로 리셋
-  
+    pendingBet = 0;
+
     if (m === "play") {
       money -= baseBet;
-    onMoneyChange?.(money);
       onMoneyChange?.(money);
-  
-      // 칩 애니메이션: 플레이어 핸드 -> 덱
+
+      // chip fly
       try {
         const fromEl = handEls[0] || playerBlocksEl;
         flyChips({ bet: baseBet, fromEl, toEl: deckStackEl, chipSrc: "assets/chip.png", getRunId });
       } catch {}
     }
-  
+
+    // reset round state
     dealerHand = [];
     playerHands = [[]];
     playerBets = [baseBet];
     results = [];
     outcomes = [];
     dealerHidden = true;
-  
-    // UI 블록 1개 재생성(카드 DOM 정리)
+    dealerBlackjack = false;
+    activeHandIdx = 0;
+
+    // reset DOM areas
+    dealerHandEl.innerHTML = "";
     initPlayerBlocks(1);
-  
-    // 딜: “모두 뒷면으로” 덱에서 날아옴
+    markActiveBlock();
+
+    // deal 2 rounds (face down flights)
     for (let t = 0; t < 2; t++) {
-      if (getRunId && getRunId() !== myRun) return;
-  
+      if (currentRunId() !== myRun) return;
+
       const p = drawCard(); playerHands[0].push(p);
       await dealCardTo(handEls[0], { rank: p.rank, keepFaceDown: true });
-      if (getRunId && getRunId() !== myRun) return;
-  
+      if (currentRunId() !== myRun) return;
+
       const d = drawCard(); dealerHand.push(d);
       await dealCardTo(dealerHandEl, { rank: d.rank, keepFaceDown: true });
-      if (getRunId && getRunId() !== myRun) return;
+      if (currentRunId() !== myRun) return;
     }
-  
-    // 공개 규칙:
-    // 플레이어 2장 공개(뒤집기)
+
+    // flip: player both, dealer first only
     const pCards = handEls[0].querySelectorAll(".card");
     flipCard(pCards[0], playerHands[0][0].rank);
     flipCard(pCards[1], playerHands[0][1].rank);
-  
-    // 딜러는 1장만 공개
+
     const dCards = dealerHandEl.querySelectorAll(".card");
     flipCard(dCards[0], dealerHand[0].rank);
-  
-    // 블랙잭(2장 15) 즉시 처리
+
+    setPlayerSums();
+    setDealerSum();
+
+    // blackjack check
     const pBJ = isBlackjack15_2cards(playerHands[0]);
     const dBJ = isBlackjack15_2cards(dealerHand);
     dealerBlackjack = dBJ;
-  
+
     if (pBJ || dBJ) {
       dealerHidden = false;
       if (dCards[1]) flipCard(dCards[1], dealerHand[1].rank);
-  
-      // 결과 처리(원본 로직 유지)
+      setDealerSum();
+
       let text = "PUSH";
       if (pBJ && !dBJ) text = "BLACKJACK!!";
       else if (!pBJ && dBJ) text = "LOSE";
       else text = "PUSH";
-  
-      // 정산: BJ 승리=WIN로 취급(원본 유지)
+
       if (text === "BLACKJACK!!") {
         if (m === "play") money += baseBet * 2;
         onMoneyChange?.(money);
@@ -541,32 +769,40 @@ export function createGame({ sfx, getRunId, getMode, onRoundOver, onMoneyChange 
         if (m === "play") money += baseBet;
         onMoneyChange?.(money);
       }
-      onMoneyChange?.(money);
-  
+
       if (sumEls[0]) sumEls[0].textContent = text;
-  
+
       phase = "roundOver";
       markActiveBlock();
       showProceedButton();
-  
       onRoundOver?.({ money, phase, outcome: text, mode: m });
       updateIndicators();
       return;
     }
-  
-    // 정상 진행
+
+    // if splittable, ask
+    if (canSplitNow()) {
+      phase = "resolvingSplit";
+      activeHandIdx = 0;
+      markActiveBlock();
+      setSplitChoiceButtons();
+      updateIndicators();
+      return;
+    }
+
+    // normal play
     phase = "playing";
     activeHandIdx = 0;
     markActiveBlock();
     setPlayButtons();
     updateIndicators();
   });
-  
-  // ---------- 시작(모듈) ----------
+
+  // ---------- init ----------
   createDeck();
   resetToBetting();
   updateIndicators();
-  
+
   function resetSession({ money: m = INITIAL_MONEY } = {}) {
     money = m;
     pendingBet = 0;
@@ -575,11 +811,6 @@ export function createGame({ sfx, getRunId, getMode, onRoundOver, onMoneyChange 
     resetToBetting();
     updateIndicators();
   }
-  
-  return {
-    resetSession,
-    resetToBetting,
-    getMoney: () => money,
-    getPhase: () => phase
-  };
+
+  return { resetSession };
 }
