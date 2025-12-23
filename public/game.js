@@ -9,7 +9,7 @@ import { flyChips } from "./anim.js";
  * - Play: betting via buttons, DEAL starts round
  * - Supports SPLIT (same rank) and DOUBLE (exactly 2 cards)
  */
-export function createGame({ sfx, getRunId, getMode, onRoundOver, onMoneyChange } = {}) {
+export function createGame({ sfx, getRunId, getMode, onRoundOver, onMoneyChange, onProceed } = {}) {
   const INITIAL_MONEY = 10000;
 
   // ---------- Deck ----------
@@ -394,7 +394,16 @@ export function createGame({ sfx, getRunId, getMode, onRoundOver, onMoneyChange 
     btn.textContent = "PROCEED";
     btn.onclick = async () => {
       await fadeOutAndClear();
-      resetToBetting();
+      // Let the app decide what to do after a round ends (advance stage, finalize, etc.)
+      // If the handler returns true, it means it handled navigation and we should not reset to betting here.
+      let handled = false;
+      try {
+        handled = (await onProceed?.({ money, phase })) === true;
+      } catch (e) {
+        // If the callback fails, fall back to the default behavior.
+        console.error(e);
+      }
+      if (!handled) resetToBetting();
     };
     el.appendChild(btn);
   }
@@ -815,5 +824,6 @@ export function createGame({ sfx, getRunId, getMode, onRoundOver, onMoneyChange 
   function getMoney() { return money; }
   function getPhase() { return phase; }
 
+  // Expose the API that app.js expects.
   return { resetSession, resetToBetting, getMoney, getPhase };
 }

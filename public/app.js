@@ -32,6 +32,8 @@ let runId = 1;
 
 let playerName = "";
 let practiceRoundsDone = 0;
+let practiceCompletedPending = false;
+let endAfterProceedReason = null;
 
 let timerHandle = null;
 let remaining = 120;
@@ -53,28 +55,55 @@ const game = createGame({
   sfx,
   getRunId,
   getMode: mode,
-  onMoneyChange: (m) => {
-    if (appStage === "PLAY" && m === 0) {
-      finalizeSession("broke");
-    }
-  },
+
+  // NOTE: do not finalize immediately on money change.
+  // We finalize after the player sees the round outcome and clicks PROCEED.
+  onMoneyChange: (_m) => {},
+
   onRoundOver: ({ money }) => {
     if (appStage === "PRACTICE") {
       practiceRoundsDone += 1;
       if (practiceRoundsDone >= 2) {
-        goPrestart();
+        // Wait for PROCEED before moving on to the 2-minute timer screen.
+        practiceCompletedPending = true;
       }
       return;
     }
 
     if (appStage === "PLAY") {
-      // pending end after finishing the current round
+      // If the timer expired during a round, or the player went broke, wait for PROCEED.
       if (pendingEndReason) {
-        finalizeSession(pendingEndReason);
+        endAfterProceedReason = pendingEndReason;
+        pendingEndReason = null;
       } else if (money === 0) {
-        finalizeSession("broke");
+        endAfterProceedReason = "broke";
       }
     }
+  },
+
+  // Called when the round-end PROCEED button is clicked.
+  // Return true to indicate the app handled the transition.
+  onProceed: ({ money }) => {
+    if (appStage === "PRACTICE") {
+      if (practiceCompletedPending) {
+        practiceCompletedPending = false;
+        goPrestart();
+        return true;
+      }
+      return false; // default: reset to betting for next practice round
+    }
+
+    if (appStage === "PLAY") {
+      if (endAfterProceedReason) {
+        const r = endAfterProceedReason;
+        endAfterProceedReason = null;
+        finalizeSession(r);
+        return true;
+      }
+      return false; // default: reset to betting for next round
+    }
+
+    return false;
   }
 });
 
@@ -121,7 +150,7 @@ async function refreshLeaderboard() {
 }
 
 // -------------------- Stage transitions --------------------
-function bumpRunId() { runId += 1; finalized = false; pendingEndReason = null; }
+function bumpRunId() { runId += 1; finalized = false; pendingEndReason = null; endAfterProceedReason = null; practiceCompletedPending = false; }
 
 function goName() {
   bumpRunId();
