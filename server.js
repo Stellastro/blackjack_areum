@@ -31,19 +31,30 @@ if (!DATABASE_URL) {
 
 async function ensureTable() {
   if (!pool) return;
+
+  // 1) 테이블이 없으면 생성
   await pool.query(`
     CREATE TABLE IF NOT EXISTS leaderboard (
       id SERIAL PRIMARY KEY,
       player TEXT NOT NULL,
-      score BIGINT NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      score BIGINT NOT NULL
+      -- created_at은 아래 ALTER로 보강(기존 테이블 호환)
     );
   `);
+
+  // 2) ✅ 과거에 created_at 없이 만들어졌을 수 있으니 컬럼 추가
+  await pool.query(`
+    ALTER TABLE leaderboard
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  `);
+
+  // 3) 인덱스(정렬 기준: score DESC, 동점이면 먼저 달성(created_at ASC))
   await pool.query(`
     CREATE INDEX IF NOT EXISTS leaderboard_score_idx
     ON leaderboard (score DESC, created_at ASC);
   `);
 }
+
 
 app.get("/healthz", (_req, res) => res.status(200).send("ok"));
 
