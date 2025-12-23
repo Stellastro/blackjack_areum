@@ -16,7 +16,6 @@ if (!DATABASE_URL) {
 const pool = DATABASE_URL
   ? new Pool({
       connectionString: DATABASE_URL,
-      ssl: { rejectUnauthorized: false },
       max: 2,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 10_000
