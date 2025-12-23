@@ -812,5 +812,8 @@ export function createGame({ sfx, getRunId, getMode, onRoundOver, onMoneyChange 
     updateIndicators();
   }
 
-  return { resetSession };
+  function getMoney() { return money; }
+  function getPhase() { return phase; }
+
+  return { resetSession, resetToBetting, getMoney, getPhase };
 }
