@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>부스용 특수 블랙잭</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- NAME screen -->
+  <section id="screenName" class="screen">
+    <div class="screen-card">
+      <div class="screen-title">이름을 입력해 주세요</div>
+      <input id="nameInput" class="screen-input" placeholder="이름" autocomplete="off" />
+      <button id="btnNameConfirm" class="screen-btn">확인</button>
+      <div class="screen-hint">연습 2판 후 본게임이 시작됩니다.</div>
+    </div>
+  </section>
+
+  <!-- PRESTART screen -->
+  <section id="screenPrestart" class="screen hidden">
+    <div class="screen-card">
+      <div class="screen-title">준비되면 시작하세요</div>
+      <div id="prestartTimer" class="big-timer">02:00</div>
+      <button id="btnStart" class="screen-btn">START</button>
+    </div>
+  </section>
+
+  <!-- RESULT screen -->
+  <section id="screenResult" class="screen hidden">
+    <div class="screen-card">
+      <div class="screen-title">결과</div>
+      <div id="resultScore" class="result-score">최종 소지금: 0</div>
+      <div id="resultRank" class="result-rank hidden"></div>
+      <button id="btnReturn" class="screen-btn">RETURN</button>
+    </div>
+  </section>
+
+  <!-- GAME table -->
+  <div id="table" class="hidden">
+    <!-- DEALER (상단 중앙) -->
+    <section id="dealer" class="zone">
+      <div class="sum-indicator">
+        <div class="label">DEALER</div>
+        <div class="sum" id="dealerSum">?</div>
+      </div>
+      <div class="hand" id="dealerHand"></div>
+    </section>
+
+    <!-- CENTER (덱/타이머/리더보드) -->
+    <section id="center" class="zone">
+      <div class="center-row">
+        <div id="deckLeft">
+          <div id="deckStack">
+            <div class="stack-card"></div>
+          </div>
+          <div class="deck-count" id="deckCount"></div>
+        </div>
+
+        <div id="playHud" class="play-hud hidden">
+          <div id="playTimer" class="play-timer">02:00</div>
+        </div>
+
+        <aside id="leaderboardPanel" class="leaderboard hidden">
+          <div class="leaderboard-title">RANKING</div>
+          <ol id="leaderboardList" class="leaderboard-list"></ol>
+        </aside>
+      </div>
+    </section>
+
+    <!-- PLAYER (하단 중앙) -->
+    <section id="player" class="zone">
+      <div id="playerBlocks"></div>
+
+      <div id="moneyRow">
+        <div class="money-box" id="moneyBox">
+          <div class="label">MONEY</div>
+          <div class="value" id="money">0</div>
+        </div>
+        <div class="money-box">
+          <div class="label">BET</div>
+          <div class="value" id="bet">0</div>
+        </div>
+      </div>
+
+      <div id="betRow">
+        <button class="betBtn" data-delta="5000">+5000</button>
+        <button class="betBtn" data-delta="1000">+1000</button>
+        <button class="betBtn" data-delta="500">+500</button>
+        <button id="btnDeal">DEAL</button>
+        <button class="betBtn" data-delta="-500">-500</button>
+        <button class="betBtn" data-delta="-1000">-1000</button>
+        <button class="betBtn" data-delta="-5000">-5000</button>
+      </div>
+    </section>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
