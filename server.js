@@ -9,108 +9,109 @@ app.use(express.json());
 const PORT = process.env.PORT || 8080;
 const DATABASE_URL = process.env.DATABASE_URL;
 
-if (!DATABASE_URL) {
-  console.warn("WARNING: DATABASE_URL env var is not set. Leaderboard API will fail.");
-}
-
-const pool = DATABASE_URL
-  ? new Pool({
-      connectionString: DATABASE_URL,
-      max: 2,
-      idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 10_000
-    })
-  : null;
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-app.use(express.static(path.join(__dirname, "public")));
+// --- DB ---
+let pool = null;
+let dbReady = false;
+
+if (!DATABASE_URL) {
+  console.warn("WARNING: DATABASE_URL env var is not set. Leaderboard API will be unavailable.");
+} else {
+  pool = new Pool({
+    connectionString: DATABASE_URL,
+    // Koyeb managed Postgres requires SSL
+    ssl: { rejectUnauthorized: false },
+    max: 2,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 10_000
+  });
+}
 
 async function ensureTable() {
   if (!pool) return;
   await pool.query(`
     CREATE TABLE IF NOT EXISTS leaderboard (
-      player TEXT PRIMARY KEY,
-      score INTEGER NOT NULL,
-      achieved_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      id SERIAL PRIMARY KEY,
+      player TEXT NOT NULL,
+      score BIGINT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
-}
-
-async function trimTop5() {
-  if (!pool) return;
   await pool.query(`
-    DELETE FROM leaderboard
-    WHERE player NOT IN (
-      SELECT player FROM leaderboard
-      ORDER BY score DESC, achieved_at ASC
-      LIMIT 5
-    );
+    CREATE INDEX IF NOT EXISTS leaderboard_score_idx
+    ON leaderboard (score DESC, created_at ASC);
   `);
 }
 
-app.get("/api/leaderboard", async (req, res) => {
+app.get("/healthz", (_req, res) => res.status(200).send("ok"));
+
+app.get("/api/leaderboard", async (_req, res) => {
+  if (!pool || !dbReady) return res.status(503).json({ error: "db_unavailable" });
+
   try {
-    if (!pool) return res.status(500).json({ error: "db_not_configured" });
-
-    const { rows } = await pool.query(`
-      SELECT player, score
-      FROM leaderboard
-      ORDER BY score DESC, achieved_at ASC
-      LIMIT 5
-    `);
-
+    const { rows } = await pool.query(
+      `SELECT player, score FROM leaderboard ORDER BY score DESC, created_at ASC LIMIT 5;`
+    );
     res.json({ items: rows });
-  } catch (e) {
+  } catch (_e) {
     res.status(500).json({ error: "failed_to_load" });
   }
 });
 
 app.post("/api/submit", async (req, res) => {
+  if (!pool || !dbReady) return res.status(503).json({ error: "db_unavailable" });
+
   try {
-    if (!pool) return res.status(500).json({ error: "db_not_configured" });
+    const player = String(req.body?.player ?? "").trim().slice(0, 40);
+    const score = Number(req.body?.score ?? NaN);
 
-    let { player, score } = req.body || {};
-    if (typeof player !== "string") player = "";
-    player = player.trim().slice(0, 30); // 한국어 포함, 길이만 제한
+    if (!player) return res.status(400).json({ error: "bad_player" });
+    if (!Number.isFinite(score)) return res.status(400).json({ error: "bad_score" });
 
-    score = Number(score);
-    if (!player) return res.status(400).json({ error: "player_required" });
-    if (!Number.isFinite(score) || score < 0) return res.status(400).json({ error: "invalid_score" });
-
-    // 동일 이름: 최고점만 유지(동점/하락은 무시)
     await pool.query(
-      `
-      INSERT INTO leaderboard (player, score, achieved_at)
-      VALUES ($1, $2, NOW())
-      ON CONFLICT (player) DO UPDATE
-        SET score = EXCLUDED.score,
-            achieved_at = NOW()
-      WHERE EXCLUDED.score > leaderboard.score
-      `,
+      `INSERT INTO leaderboard (player, score) VALUES ($1, $2);`,
       [player, Math.floor(score)]
     );
 
-    await trimTop5();
-
-    const { rows } = await pool.query(`
-      SELECT player, score
-      FROM leaderboard
-      ORDER BY score DESC, achieved_at ASC
-      LIMIT 5
+    // keep only top 5
+    await pool.query(`
+      DELETE FROM leaderboard
+      WHERE id NOT IN (
+        SELECT id FROM leaderboard
+        ORDER BY score DESC, created_at ASC
+        LIMIT 5
+      );
     `);
 
-    const idx = rows.findIndex(r => r.player === player);
+    const { rows } = await pool.query(
+      `SELECT player, score FROM leaderboard ORDER BY score DESC, created_at ASC LIMIT 5;`
+    );
+    const idx = rows.findIndex(r => r.player === player && Number(r.score) === Math.floor(score));
+
     res.json({
       entered: idx >= 0,
       ...(idx >= 0 ? { rank: idx + 1 } : {}),
       leaderboard: rows
     });
-  } catch (e) {
+  } catch (_e) {
     res.status(500).json({ error: "failed_to_submit" });
   }
 });
 
-await ensureTable();
-app.listen(PORT, () => console.log(`Listening on ${PORT}`));
+// --- static ---
+app.use(express.static(path.join(__dirname, "public")));
+
+(async () => {
+  try {
+    await ensureTable();
+    dbReady = !!pool;
+    if (dbReady) console.log("DB ready.");
+  } catch (e) {
+    dbReady = false;
+    console.error("DB init failed (service will still run, API returns 503):", e?.message ?? e);
+  }
+
+  app.listen(PORT, () => console.log(`Listening on ${PORT}`));
+})();
